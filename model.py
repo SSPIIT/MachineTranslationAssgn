@@ -266,10 +266,13 @@ class Transformer(nn.Module):
     Full Encoder-Decoder Transformer for Neural Machine Translation.
     """
 
-    def __init__(self, src_vocab_size, tgt_vocab_size,
+    def __init__(self, src_vocab_size=10000, tgt_vocab_size=10000,
                  d_model=256, num_layers=3, num_heads=8,
                  d_ff=512, dropout=0.1, max_len=256):
         super().__init__()
+        self.src_vocab_size = src_vocab_size
+        self.tgt_vocab_size = tgt_vocab_size
+        self.max_len = max_len
         self.encoder = Encoder(src_vocab_size, d_model, num_layers, num_heads,
                                d_ff, dropout, max_len)
         self.decoder = Decoder(tgt_vocab_size, d_model, num_layers, num_heads,
@@ -307,6 +310,55 @@ class Transformer(nn.Module):
         dec_output = self.decoder(tgt, enc_output, tgt_mask, src_mask)
         logits = self.projection(dec_output)  # (B, T, tgt_vocab)
         return logits
+
+    def infer(self, src, src_pad_idx=0, tgt_sos_idx=1, tgt_eos_idx=2,
+              tgt_pad_idx=0, max_len=None):
+        """
+        Greedy decoding inference method.
+        Called by the Gradescope autograder as model.infer(src, ...).
+
+        Args:
+            src:          (B, S_src) source token indices
+            src_pad_idx:  padding index for source (default 0)
+            tgt_sos_idx:  <sos> index for target (default 1)
+            tgt_eos_idx:  <eos> index for target (default 2)
+            tgt_pad_idx:  padding index for target (default 0)
+            max_len:      maximum output length (default self.max_len)
+
+        Returns:
+            (B, T) tensor of predicted token indices
+        """
+        if max_len is None:
+            max_len = self.max_len
+
+        self.eval()
+        device = next(self.parameters()).device
+        src = src.to(device)
+        B = src.size(0)
+
+        with torch.no_grad():
+            src_mask = self.make_src_mask(src, src_pad_idx)
+            enc_output = self.encoder(src, src_mask)
+
+            # Start with <sos> for every item in the batch
+            tgt = torch.full((B, 1), tgt_sos_idx, dtype=torch.long, device=device)
+            finished = torch.zeros(B, dtype=torch.bool, device=device)
+
+            for _ in range(max_len - 1):
+                tgt_mask = self.make_tgt_mask(tgt, tgt_pad_idx)
+                dec_output = self.decoder(tgt, enc_output, tgt_mask, src_mask)
+                logits = self.projection(dec_output)          # (B, T, V)
+                next_token = logits[:, -1, :].argmax(-1)      # (B,)
+
+                # Replace tokens for finished sequences with <eos>
+                next_token = next_token.masked_fill(finished, tgt_eos_idx)
+                tgt = torch.cat([tgt, next_token.unsqueeze(1)], dim=1)
+
+                finished = finished | (next_token == tgt_eos_idx)
+                if finished.all():
+                    break
+
+        return tgt  # (B, T)  includes leading <sos>
 
 
 # ─────────────────────────────────────────────
