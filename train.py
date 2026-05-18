@@ -1,3 +1,9 @@
+
+
+
+
+
+
 """
 train.py - Main Training Script
 DA6401 Assignment 3
@@ -22,7 +28,7 @@ import matplotlib.pyplot as plt
 
 from model import Transformer, TransformerLearnedPE
 from model_no_scale import TransformerNoScale
-from scheduler import NoamScheduler
+from lr_scheduler import NoamScheduler
 from loss import LabelSmoothingLoss
 from dataset import build_dataloaders
 from inference import evaluate_bleu, translate_sentence
@@ -272,6 +278,7 @@ def main(args):
         if val_bleu > best_bleu:
             best_bleu = val_bleu
             ckpt_path = os.path.join(args.save_dir, f"{args.run_name}_best.pt")
+            print(f"  Run: python evaluate_checkpoint.py --checkpoint {ckpt_path}")
             os.makedirs(args.save_dir, exist_ok=True)
             torch.save({
                 'epoch': epoch,
