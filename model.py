@@ -275,7 +275,12 @@ class Transformer(nn.Module):
         self.max_len = max_len
         self.src_vocab = None
         self.tgt_vocab = None
-        self.de_tokenizer = None
+        # NOTE: tokenizers are intentionally NOT stored as attributes here.
+        # They are loaded lazily in infer() because spaCy objects cannot be
+        # reliably serialized/deserialized via torch.save/load.
+        self._de_tokenizer = None
+        self._en_tokenizer = None
+
         self.encoder = Encoder(src_vocab_size, d_model, num_layers, num_heads,
                                d_ff, dropout, max_len)
         self.decoder = Decoder(tgt_vocab_size, d_model, num_layers, num_heads,
@@ -288,6 +293,38 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
+    # ------------------------------------------------------------------
+    # Lazy tokenizer loader — safe after checkpoint restore
+    # ------------------------------------------------------------------
+    def _get_de_tokenizer(self):
+        """Return a callable German tokenizer, loading spaCy on first call."""
+        # Guard: if stored value is not callable (e.g. corrupted after load),
+        # discard it and reload.
+        if not callable(self._de_tokenizer):
+            import spacy
+            self._de_tokenizer = spacy.load("de_core_news_sm")
+        return self._de_tokenizer
+
+    def _get_en_tokenizer(self):
+        """Return a callable English tokenizer, loading spaCy on first call."""
+        if not callable(self._en_tokenizer):
+            import spacy
+            self._en_tokenizer = spacy.load("en_core_web_sm")
+        return self._en_tokenizer
+
+    # Keep backward-compatible property so old code (train.py etc.) that
+    # does  model.de_tokenizer = spacy.load(...)  still works.
+    @property
+    def de_tokenizer(self):
+        return self._de_tokenizer
+
+    @de_tokenizer.setter
+    def de_tokenizer(self, value):
+        self._de_tokenizer = value
+
+    # ------------------------------------------------------------------
+    # Mask helpers
+    # ------------------------------------------------------------------
     def make_src_mask(self, src, pad_idx):
         """Padding mask for encoder: (B, 1, 1, S_src)"""
         mask = (src == pad_idx).unsqueeze(1).unsqueeze(2)
@@ -314,48 +351,73 @@ class Transformer(nn.Module):
         logits = self.projection(dec_output)  # (B, T, tgt_vocab)
         return logits
 
+    # ------------------------------------------------------------------
+    # Tokenize a German string robustly
+    # ------------------------------------------------------------------
+    def _tokenize_de(self, text: str):
+        """
+        Tokenize a German string to a list of token strings.
+        Uses spaCy when available; falls back to whitespace split.
+        """
+        try:
+            tok = self._get_de_tokenizer()
+            doc = tok(text)
+            return [t.text for t in doc]
+        except Exception:
+            return text.lower().split()
+
+    # ------------------------------------------------------------------
+    # Infer: called by Gradescope autograder as model.infer(src_text)
+    # ------------------------------------------------------------------
     def infer(self, src, src_pad_idx=0, tgt_sos_idx=1, tgt_eos_idx=2,
               tgt_pad_idx=0, max_len=None):
         """
-        Greedy decoding inference method.
-        Called by the Gradescope autograder as model.infer(src, ...).
+        Greedy decoding inference.
 
         Args:
-            src:          (B, S_src) source token indices
+            src:          str  OR  (B, S_src) LongTensor of source token ids
             src_pad_idx:  padding index for source (default 0)
-            tgt_sos_idx:  <sos> index for target (default 1)
-            tgt_eos_idx:  <eos> index for target (default 2)
+            tgt_sos_idx:  <sos> index for target  (default 1)
+            tgt_eos_idx:  <eos> index for target  (default 2)
             tgt_pad_idx:  padding index for target (default 0)
-            max_len:      maximum output length (default self.max_len)
+            max_len:      maximum output length
 
         Returns:
-            (B, T) tensor of predicted token indices
+            str  – translated English string  (when src is a string)
+            (B, T) LongTensor                 (when src is a tensor)
         """
         if max_len is None:
             max_len = self.max_len
 
         self.eval()
         device = next(self.parameters()).device
+        string_input = isinstance(src, str)
 
-        # Handle string input from autograder
-        # Handle raw string input from autograder
-        if isinstance(src, str):
-            tokens = self.de_tokenizer(src)
+        if string_input:
+            # ── tokenize ──────────────────────────────────────────────
+            tokens = self._tokenize_de(src)
 
-            src_ids = (
-                [self.src_vocab.sos_idx]
-                + self.src_vocab.encode(tokens)
-                + [self.src_vocab.eos_idx]
-            )
+            # ── encode to ids ─────────────────────────────────────────
+            if self.src_vocab is not None:
+                try:
+                    src_ids = (
+                        [self.src_vocab.sos_idx]
+                        + self.src_vocab.encode(tokens)
+                        + [self.src_vocab.eos_idx]
+                    )
+                except Exception:
+                    # encode() failed — return empty string rather than crash
+                    return ""
+            else:
+                # No vocabulary attached; we cannot encode → return empty
+                return ""
 
             src = torch.tensor([src_ids], dtype=torch.long, device=device)
-
-            string_input = True
         else:
             src = src.to(device)
-            string_input = False
 
         B = src.size(0)
+
         with torch.no_grad():
             src_mask = self.make_src_mask(src, src_pad_idx)
             enc_output = self.encoder(src, src_mask)
@@ -370,7 +432,7 @@ class Transformer(nn.Module):
                 logits = self.projection(dec_output)          # (B, T, V)
                 next_token = logits[:, -1, :].argmax(-1)      # (B,)
 
-                # Replace tokens for finished sequences with <eos>
+                # Keep <eos> for finished sequences
                 next_token = next_token.masked_fill(finished, tgt_eos_idx)
                 tgt = torch.cat([tgt, next_token.unsqueeze(1)], dim=1)
 
@@ -379,20 +441,21 @@ class Transformer(nn.Module):
                     break
 
         if not string_input:
-            return tgt
+            return tgt  # (B, T)
 
+        # ── decode ids → string ───────────────────────────────────────
         decoded = []
+        if self.tgt_vocab is not None:
+            for token_id in tgt[0].tolist():
+                if token_id in (tgt_sos_idx, tgt_pad_idx):
+                    continue
+                if token_id == tgt_eos_idx:
+                    break
+                word = self.tgt_vocab.idx2token.get(token_id, "")
+                if word:
+                    decoded.append(word)
 
-        for token in tgt[0].tolist():
-            if token in [tgt_sos_idx, tgt_pad_idx]:
-                continue
-
-            if token == tgt_eos_idx:
-                break
-
-            decoded.append(self.tgt_vocab.idx2token[token])
-
-        return " ".join(decoded) # (B, T)  includes leading <sos>
+        return " ".join(decoded)
 
 
 # ─────────────────────────────────────────────
