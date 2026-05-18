@@ -188,6 +188,11 @@ def main(args):
         dropout=args.dropout,
         max_len=args.max_len
     ).to(device)
+    from dataset import SpacyTokenizer
+
+    model.src_vocab = src_vocab
+    model.tgt_vocab = tgt_vocab
+    model.de_tokenizer = SpacyTokenizer('de_core_news_sm')
 
     print(f"Model parameters: {count_parameters(model):,}")
     wandb.config.update({"params": count_parameters(model)})

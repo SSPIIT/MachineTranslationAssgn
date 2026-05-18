@@ -273,6 +273,9 @@ class Transformer(nn.Module):
         self.src_vocab_size = src_vocab_size
         self.tgt_vocab_size = tgt_vocab_size
         self.max_len = max_len
+        self.src_vocab = None
+        self.tgt_vocab = None
+        self.de_tokenizer = None
         self.encoder = Encoder(src_vocab_size, d_model, num_layers, num_heads,
                                d_ff, dropout, max_len)
         self.decoder = Decoder(tgt_vocab_size, d_model, num_layers, num_heads,
@@ -335,12 +338,24 @@ class Transformer(nn.Module):
         device = next(self.parameters()).device
 
         # Handle string input from autograder
+        # Handle raw string input from autograder
         if isinstance(src, str):
-            return src
+            tokens = self.de_tokenizer(src)
 
-        src = src.to(device)
+            src_ids = (
+                [self.src_vocab.sos_idx]
+                + self.src_vocab.encode(tokens)
+                + [self.src_vocab.eos_idx]
+            )
+
+            src = torch.tensor([src_ids], dtype=torch.long, device=device)
+
+            string_input = True
+        else:
+            src = src.to(device)
+            string_input = False
+
         B = src.size(0)
-
         with torch.no_grad():
             src_mask = self.make_src_mask(src, src_pad_idx)
             enc_output = self.encoder(src, src_mask)
@@ -363,7 +378,21 @@ class Transformer(nn.Module):
                 if finished.all():
                     break
 
-        return tgt  # (B, T)  includes leading <sos>
+        if not string_input:
+            return tgt
+
+        decoded = []
+
+        for token in tgt[0].tolist():
+            if token in [tgt_sos_idx, tgt_pad_idx]:
+                continue
+
+            if token == tgt_eos_idx:
+                break
+
+            decoded.append(self.tgt_vocab.idx2token[token])
+
+        return " ".join(decoded) # (B, T)  includes leading <sos>
 
 
 # ─────────────────────────────────────────────
