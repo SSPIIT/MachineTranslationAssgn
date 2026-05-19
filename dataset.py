@@ -1,177 +1,296 @@
 """
-dataset.py - Data loading, tokenization, and vocabulary for Multi30k
-DA6401 Assignment 3
-
-Tokenization: spaCy (de_core_news_sm for German, en_core_web_sm for English)
+dataset.py — Multi30k Dataset Loading, Tokenization, and Vocabulary
+DA6401 Assignment 3: "Attention Is All You Need"
 """
 
-import spacy
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from collections import Counter
 from datasets import load_dataset
+import spacy
+from collections import Counter
+from typing import List, Tuple, Dict, Optional
 
 
-# ─────────────────────────────────────────────
-# Vocabulary
-# ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+#  VOCABULARY
+# ══════════════════════════════════════════════════════════════════════
+
 class Vocabulary:
-    """Simple vocabulary with special tokens."""
+    """
+    Simple vocabulary class that maps tokens ↔ integer indices.
 
-    PAD = '<pad>'
-    SOS = '<sos>'
-    EOS = '<eos>'
-    UNK = '<unk>'
+    Special tokens:
+        <unk>  index 0  – unknown token
+        <pad>  index 1  – padding token
+        <sos>  index 2  – start of sequence
+        <eos>  index 3  – end of sequence
+    """
 
-    def __init__(self, min_freq=2):
-        self.min_freq = min_freq
-        self.token2idx = {}
-        self.idx2token = {}
-        self._special = [self.PAD, self.SOS, self.EOS, self.UNK]
-        for tok in self._special:
-            self._add(tok)
+    UNK = "<unk>"
+    PAD = "<pad>"
+    SOS = "<sos>"
+    EOS = "<eos>"
 
-    def _add(self, token):
-        if token not in self.token2idx:
-            idx = len(self.token2idx)
-            self.token2idx[token] = idx
-            self.idx2token[idx] = token
+    UNK_IDX = 0
+    PAD_IDX = 1
+    SOS_IDX = 2
+    EOS_IDX = 3
 
-    def build(self, tokenized_sentences):
-        counter = Counter()
-        for tokens in tokenized_sentences:
-            counter.update(tokens)
-        for tok, freq in counter.items():
-            if freq >= self.min_freq:
-                self._add(tok)
+    def __init__(self) -> None:
+        self.stoi: Dict[str, int] = {
+            self.UNK: self.UNK_IDX,
+            self.PAD: self.PAD_IDX,
+            self.SOS: self.SOS_IDX,
+            self.EOS: self.EOS_IDX,
+        }
+        self.itos: Dict[int, str] = {v: k for k, v in self.stoi.items()}
 
-    def encode(self, tokens):
-        unk = self.token2idx[self.UNK]
-        return [self.token2idx.get(t, unk) for t in tokens]
+    def build_from_counter(self, counter: Counter, min_freq: int = 2) -> None:
+        """
+        Populate vocab from a token frequency Counter.
 
-    def decode(self, indices):
-        return [self.idx2token.get(i, self.UNK) for i in indices]
+        Args:
+            counter  : Counter mapping token → frequency.
+            min_freq : Minimum frequency to include a token (default 2).
+        """
+        for token, freq in counter.most_common():
+            if freq < min_freq:
+                break
+            if token not in self.stoi:
+                idx = len(self.stoi)
+                self.stoi[token] = idx
+                self.itos[idx] = token
 
-    def __len__(self):
-        return len(self.token2idx)
+    def __len__(self) -> int:
+        return len(self.stoi)
 
-    @property
-    def pad_idx(self):
-        return self.token2idx[self.PAD]
+    def lookup_token(self, idx: int) -> str:
+        return self.itos.get(idx, self.UNK)
 
-    @property
-    def sos_idx(self):
-        return self.token2idx[self.SOS]
+    def lookup_index(self, token: str) -> int:
+        return self.stoi.get(token, self.UNK_IDX)
 
-    @property
-    def eos_idx(self):
-        return self.token2idx[self.EOS]
+    def encode(self, tokens: List[str]) -> List[int]:
+        """Convert list of tokens → list of indices (with SOS/EOS)."""
+        return (
+            [self.SOS_IDX]
+            + [self.stoi.get(t, self.UNK_IDX) for t in tokens]
+            + [self.EOS_IDX]
+        )
+
+    def decode(self, indices: List[int], skip_special: bool = True) -> List[str]:
+        """Convert list of indices → list of tokens."""
+        special = {self.UNK_IDX, self.PAD_IDX, self.SOS_IDX, self.EOS_IDX}
+        result = []
+        for idx in indices:
+            if skip_special and idx in special:
+                continue
+            result.append(self.itos.get(idx, self.UNK))
+        return result
 
 
-# ─────────────────────────────────────────────
-# Tokenizer (spaCy)
-# ─────────────────────────────────────────────
-class SpacyTokenizer:
-    def __init__(self, lang):
+# ══════════════════════════════════════════════════════════════════════
+#  DATASET
+# ══════════════════════════════════════════════════════════════════════
+
+class Multi30kDataset(Dataset):
+    """
+    Wrapper around the bentrevett/multi30k HuggingFace dataset.
+
+    Handles:
+      - Loading the dataset splits
+      - Tokenization with spaCy (de_core_news_sm / en_core_web_sm)
+      - Vocabulary construction (shared across train/val/test)
+      - Conversion of raw sentences → padded integer tensors
+
+    Args:
+        split      : 'train', 'validation', or 'test'
+        src_vocab  : Pre-built Vocabulary for German  (None → build from data)
+        tgt_vocab  : Pre-built Vocabulary for English (None → build from data)
+        min_freq   : Minimum token frequency for vocabulary inclusion
+        max_len    : Maximum sequence length (longer sequences are dropped)
+    """
+
+    def __init__(
+        self,
+        split: str = "train",
+        src_vocab: Optional[Vocabulary] = None,
+        tgt_vocab: Optional[Vocabulary] = None,
+        min_freq: int = 2,
+        max_len: int = 100,
+    ) -> None:
+        self.split = split
+        self.max_len = max_len
+
+        # ── load spaCy tokenizers ──────────────────────────────────────
         try:
-            self.nlp = spacy.load(lang)
+            self.de_nlp = spacy.load("de_core_news_sm")
         except OSError:
             raise OSError(
-                f"spaCy model '{lang}' not found. "
-                f"Run: python -m spacy download {lang}"
+                "German spaCy model not found. "
+                "Run: python -m spacy download de_core_news_sm"
+            )
+        try:
+            self.en_nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            raise OSError(
+                "English spaCy model not found. "
+                "Run: python -m spacy download en_core_web_sm"
             )
 
-    def __call__(self, text):
-        return [tok.text.lower() for tok in self.nlp.tokenizer(text)]
+        # ── load HuggingFace dataset ───────────────────────────────────
+        raw = load_dataset("bentrevett/multi30k", trust_remote_code=True)
+        self.raw_data = raw[split]
+
+        # ── tokenize all sentences ────────────────────────────────────
+        self.src_tokens: List[List[str]] = []
+        self.tgt_tokens: List[List[str]] = []
+        self._tokenize_all()
+
+        # ── build or reuse vocabularies ───────────────────────────────
+        if src_vocab is None:
+            self.src_vocab = Vocabulary()
+            src_counter = Counter(
+                tok for sent in self.src_tokens for tok in sent
+            )
+            self.src_vocab.build_from_counter(src_counter, min_freq=min_freq)
+        else:
+            self.src_vocab = src_vocab
+
+        if tgt_vocab is None:
+            self.tgt_vocab = Vocabulary()
+            tgt_counter = Counter(
+                tok for sent in self.tgt_tokens for tok in sent
+            )
+            self.tgt_vocab.build_from_counter(tgt_counter, min_freq=min_freq)
+        else:
+            self.tgt_vocab = tgt_vocab
+
+        # ── convert tokens → integer lists ────────────────────────────
+        self.src_data, self.tgt_data = self._encode_all()
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _tokenize_de(self, text: str) -> List[str]:
+        return [tok.text.lower() for tok in self.de_nlp(text.strip())]
+
+    def _tokenize_en(self, text: str) -> List[str]:
+        return [tok.text.lower() for tok in self.en_nlp(text.strip())]
+
+    def _tokenize_all(self) -> None:
+        for example in self.raw_data:
+            de_toks = self._tokenize_de(example["de"])
+            en_toks = self._tokenize_en(example["en"])
+            self.src_tokens.append(de_toks)
+            self.tgt_tokens.append(en_toks)
+
+    def _encode_all(self) -> Tuple[List[List[int]], List[List[int]]]:
+        src_data, tgt_data = [], []
+        for src_toks, tgt_toks in zip(self.src_tokens, self.tgt_tokens):
+            # +2 for SOS/EOS
+            if len(src_toks) + 2 > self.max_len or len(tgt_toks) + 2 > self.max_len:
+                continue
+            src_data.append(self.src_vocab.encode(src_toks))
+            tgt_data.append(self.tgt_vocab.encode(tgt_toks))
+        return src_data, tgt_data
+
+    # ------------------------------------------------------------------
+    # Public methods required by assignment skeleton
+    # ------------------------------------------------------------------
+
+    def build_vocab(self) -> Tuple[Vocabulary, Vocabulary]:
+        """Return the (src_vocab, tgt_vocab) built during __init__."""
+        return self.src_vocab, self.tgt_vocab
+
+    def process_data(self) -> Tuple[List[List[int]], List[List[int]]]:
+        """Return (src_data, tgt_data) as lists of integer index lists."""
+        return self.src_data, self.tgt_data
+
+    def tokenize_src(self, text: str) -> List[str]:
+        """Tokenize a raw German sentence."""
+        return self._tokenize_de(text)
+
+    # ------------------------------------------------------------------
+    # PyTorch Dataset interface
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        return len(self.src_data)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        src = torch.tensor(self.src_data[idx], dtype=torch.long)
+        tgt = torch.tensor(self.tgt_data[idx], dtype=torch.long)
+        return src, tgt
 
 
-# ─────────────────────────────────────────────
-# Dataset
-# ─────────────────────────────────────────────
-class Multi30kDataset(Dataset):
-    def __init__(self, data, src_tokenizer, tgt_tokenizer,
-                 src_vocab, tgt_vocab, max_len=256):
-        self.src_vocab = src_vocab
-        self.tgt_vocab = tgt_vocab
-        self.max_len = max_len
-        self.pairs = []
+# ══════════════════════════════════════════════════════════════════════
+#  COLLATE & DATALOADER FACTORY
+# ══════════════════════════════════════════════════════════════════════
 
-        for example in data:
-            src_tokens = src_tokenizer(example['de'])[:max_len - 2]
-            tgt_tokens = tgt_tokenizer(example['en'])[:max_len - 2]
+def collate_fn(
+    batch: List[Tuple[torch.Tensor, torch.Tensor]],
+    pad_idx: int = Vocabulary.PAD_IDX,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Pad a batch of (src, tgt) tensor pairs to the same length.
 
-            src_ids = ([src_vocab.sos_idx]
-                       + src_vocab.encode(src_tokens)
-                       + [src_vocab.eos_idx])
-            tgt_ids = ([tgt_vocab.sos_idx]
-                       + tgt_vocab.encode(tgt_tokens)
-                       + [tgt_vocab.eos_idx])
-
-            self.pairs.append((
-                torch.tensor(src_ids, dtype=torch.long),
-                torch.tensor(tgt_ids, dtype=torch.long)
-            ))
-
-    def __len__(self):
-        return len(self.pairs)
-
-    def __getitem__(self, idx):
-        return self.pairs[idx]
-
-
-def collate_fn(batch, src_pad_idx, tgt_pad_idx):
+    Returns:
+        src_batch : [batch, src_len]
+        tgt_batch : [batch, tgt_len]
+    """
     src_batch, tgt_batch = zip(*batch)
-    src_padded = pad_sequence(src_batch, batch_first=True, padding_value=src_pad_idx)
-    tgt_padded = pad_sequence(tgt_batch, batch_first=True, padding_value=tgt_pad_idx)
-    return src_padded, tgt_padded
+    src_batch = pad_sequence(src_batch, batch_first=True, padding_value=pad_idx)
+    tgt_batch = pad_sequence(tgt_batch, batch_first=True, padding_value=pad_idx)
+    return src_batch, tgt_batch
 
 
-# ─────────────────────────────────────────────
-# Main build function
-# ─────────────────────────────────────────────
-def build_dataloaders(batch_size=128, max_len=256, min_freq=2):
+def get_dataloaders(
+    batch_size: int = 128,
+    min_freq: int = 2,
+    max_len: int = 100,
+) -> Tuple[DataLoader, DataLoader, DataLoader, Vocabulary, Vocabulary]:
     """
-    Download Multi30k, tokenize with spaCy, build vocabularies,
-    and return DataLoaders.
+    Build train/val/test DataLoaders sharing the same vocabulary.
+
+    Returns:
+        train_loader, val_loader, test_loader, src_vocab, tgt_vocab
     """
-    print("Loading Multi30k dataset...")
-    dataset = load_dataset("bentrevett/multi30k")
-    train_data = list(dataset['train'])
-    val_data   = list(dataset['validation'])
-    test_data  = list(dataset['test'])
+    # Build vocab from training split only
+    train_ds = Multi30kDataset(
+        split="train", min_freq=min_freq, max_len=max_len
+    )
+    src_vocab, tgt_vocab = train_ds.build_vocab()
 
-    print("Loading spaCy tokenizers...")
-    de_tokenizer = SpacyTokenizer('de_core_news_sm')
-    en_tokenizer = SpacyTokenizer('en_core_web_sm')
-
-    print("Tokenizing training data for vocabulary...")
-    train_de = [de_tokenizer(ex['de'])[:max_len - 2] for ex in train_data]
-    train_en = [en_tokenizer(ex['en'])[:max_len - 2] for ex in train_data]
-
-    src_vocab = Vocabulary(min_freq=min_freq)
-    tgt_vocab = Vocabulary(min_freq=min_freq)
-    src_vocab.build(train_de)
-    tgt_vocab.build(train_en)
-    print(f"Vocab sizes — DE: {len(src_vocab):,}  EN: {len(tgt_vocab):,}")
-
-    train_ds = Multi30kDataset(train_data, de_tokenizer, en_tokenizer,
-                               src_vocab, tgt_vocab, max_len)
-    val_ds   = Multi30kDataset(val_data,   de_tokenizer, en_tokenizer,
-                               src_vocab, tgt_vocab, max_len)
-    test_ds  = Multi30kDataset(test_data,  de_tokenizer, en_tokenizer,
-                               src_vocab, tgt_vocab, max_len)
+    val_ds = Multi30kDataset(
+        split="validation",
+        src_vocab=src_vocab,
+        tgt_vocab=tgt_vocab,
+        max_len=max_len,
+    )
+    test_ds = Multi30kDataset(
+        split="test",
+        src_vocab=src_vocab,
+        tgt_vocab=tgt_vocab,
+        max_len=max_len,
+    )
 
     from functools import partial
-    _collate = partial(collate_fn,
-                       src_pad_idx=src_vocab.pad_idx,
-                       tgt_pad_idx=tgt_vocab.pad_idx)
+    _collate = partial(collate_fn, pad_idx=Vocabulary.PAD_IDX)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size,
-                              shuffle=True,  collate_fn=_collate, num_workers=2)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size,
-                              shuffle=False, collate_fn=_collate, num_workers=2)
-    test_loader  = DataLoader(test_ds,  batch_size=batch_size,
-                              shuffle=False, collate_fn=_collate, num_workers=2)
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        collate_fn=_collate, num_workers=2, pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=batch_size, shuffle=False,
+        collate_fn=_collate, num_workers=2, pin_memory=True,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=batch_size, shuffle=False,
+        collate_fn=_collate, num_workers=2, pin_memory=True,
+    )
 
     return train_loader, val_loader, test_loader, src_vocab, tgt_vocab
