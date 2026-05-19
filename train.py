@@ -290,46 +290,19 @@ def evaluate_bleu(
 # ══════════════════════════════════════════════════════════════════════
 
 def save_checkpoint(
-    model: Transformer,
-    optimizer: torch.optim.Optimizer,
+    model,
+    optimizer,
     scheduler,
-    epoch: int,
-    path: str = "checkpoint.pt",
-) -> None:
-    """
-    Save model + optimiser + scheduler state to disk.
+    epoch,
+    path="best_checkpoint.pt",
+):
 
-    Saves a dict with keys:
-        'epoch', 'model_state_dict', 'optimizer_state_dict',
-        'scheduler_state_dict', 'model_config'
-    """
-    # Collect model config so it can be reconstructed
-    src_embed = model.src_embed
-    tgt_embed = model.tgt_embed
-    enc_layer = model.encoder.layers[0]
-    model_config = {
-        "src_vocab_size": src_embed.num_embeddings,
-        "tgt_vocab_size": tgt_embed.num_embeddings,
-        "d_model":        model.d_model,
-        "N":              len(model.encoder.layers),
-        "num_heads":      enc_layer.self_attn.num_heads,
-        "d_ff":           enc_layer.ffn.linear1.out_features,
-        "dropout":        enc_layer.dropout.p,
-        "pad_idx":        model.pad_idx,
-    }
+    torch.save(
+        model.state_dict(),
+        path
+    )
 
-    # torch.save(
-    #     {
-    #         "epoch":                epoch,
-    #         "model_state_dict":     model.state_dict(),
-    #         "optimizer_state_dict": optimizer.state_dict(),
-    #         "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-    #         "model_config":         model_config,
-    #     },
-    #     path,
-    # )
-    torch.save(model.state_dict(), path)
-    print(f"[Checkpoint] Saved epoch {epoch} → {path}")
+    print(f"Saved checkpoint to {path}")
 
 
 def load_checkpoint(

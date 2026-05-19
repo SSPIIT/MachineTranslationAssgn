@@ -429,10 +429,10 @@ class Transformer(nn.Module):
         self,
         src_vocab_size: int = 10000,
         tgt_vocab_size: int = 10000,
-        d_model: int = 512,
-        N: int = 6,
+        d_model: int = 256,
+        N: int = 3,
+        d_ff: int = 512,
         num_heads: int = 8,
-        d_ff: int = 2048,
         dropout: float = 0.1,
         pad_idx: int = 1,
     ) -> None:
@@ -617,7 +617,7 @@ class Transformer(nn.Module):
         self,
         src_sentence: str,
         device: str = "cpu",
-        max_len: int = 100,
+        max_len: int = 20,
     ) -> str:
 
         self.eval()
