@@ -616,8 +616,8 @@ class Transformer(nn.Module):
     def infer(
         self,
         src_sentence: str,
-        device: str = "cpu",
-        max_len: int = 20,
+        device = next(self.parameters()).device,
+        max_len: int = 40,
     ) -> str:
 
         self.eval()
