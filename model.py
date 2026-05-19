@@ -617,7 +617,7 @@ class Transformer(nn.Module):
         self,
         src_sentence: str,
         # device = next(self.parameters()).device,
-        max_len: int = 40,
+        max_len: int = 50,
     ) -> str:
 
         self.eval()
