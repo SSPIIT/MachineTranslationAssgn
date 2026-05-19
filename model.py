@@ -448,7 +448,8 @@ class Transformer(nn.Module):
             else "cpu"
         )
 
-        self.de_nlp = spacy.load("de_core_news_sm")
+        # self.de_nlp = spacy.load("de_core_news_sm")
+        self.de_nlp = spacy.blank("de")
 
         _, _, _, self.src_vocab, self.tgt_vocab = get_dataloaders(
             batch_size=1

@@ -125,14 +125,16 @@ class Multi30kDataset(Dataset):
 
         # ── load spaCy tokenizers ──────────────────────────────────────
         try:
-            self.de_nlp = spacy.load("de_core_news_sm")
+            # self.de_nlp = spacy.load("de_core_news_sm")
+            self.de_nlp = spacy.blank("de")
         except OSError:
             raise OSError(
                 "German spaCy model not found. "
                 "Run: python -m spacy download de_core_news_sm"
             )
         try:
-            self.en_nlp = spacy.load("en_core_web_sm")
+            # self.en_nlp = spacy.load("en_core_web_sm")
+            self.en_nlp = spacy.blank("en")
         except OSError:
             raise OSError(
                 "English spaCy model not found. "
