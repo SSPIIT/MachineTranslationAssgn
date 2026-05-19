@@ -527,7 +527,7 @@ class Transformer(nn.Module):
             import gdown
 
             gdown.download(
-                id="10ZkESdbBEproTxuYRDkDw0slEh31uzzw",
+                id="1Lw7yuLgbd7MHS_kfAbb7Xl39YnG_gZUY",
                 output=path,
                 quiet=False
             )
