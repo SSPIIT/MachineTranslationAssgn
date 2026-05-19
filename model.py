@@ -617,7 +617,7 @@ class Transformer(nn.Module):
         self,
         src_sentence: str,
         # device = next(self.parameters()).device,
-        max_len: int = 50,
+        max_len: int = 60,
     ) -> str:
 
         self.eval()
@@ -674,9 +674,31 @@ class Transformer(nn.Module):
                     tgt_mask
                 )
 
-                next_tok = logits[:, -1, :].argmax(
-                    dim=-1,
-                    keepdim=True
+                probs = torch.softmax(
+                    logits[:, -1, :],
+                    dim=-1
+                )
+
+                topk = torch.topk(
+                    probs,
+                    k=3,
+                    dim=-1
+                )
+
+                candidates = topk.indices[0]
+
+                next_tok = candidates[0].item()
+
+                # avoid immediate repetition
+                if (
+                    ys.size(1) > 1
+                    and next_tok == ys[0, -1].item()
+                ):
+                    next_tok = candidates[1].item()
+
+                next_tok = torch.tensor(
+                    [[next_tok]],
+                    device=device
                 )
 
                 ys = torch.cat(
@@ -684,7 +706,10 @@ class Transformer(nn.Module):
                     dim=1
                 )
 
-                if next_tok.item() == eos_idx:
+                if (
+                    next_tok.item() == eos_idx
+                    and ys.size(1) > 5
+                ):
                     break
 
             generated = ys.squeeze(0).tolist()[1:]
