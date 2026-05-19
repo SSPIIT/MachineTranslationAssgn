@@ -305,28 +305,18 @@ def save_checkpoint(
     print(f"Saved checkpoint to {path}")
 
 
-def load_checkpoint(
-    path: str,
-    model: Transformer,
-    optimizer: Optional[torch.optim.Optimizer] = None,
-    scheduler=None,
-) -> int:
-    """
-    Restore model (and optionally optimizer/scheduler) state from disk.
+def load_checkpoint(path, model, optimizer=None, scheduler=None):
 
-    Returns:
-        epoch : The epoch at which the checkpoint was saved (int).
-    """
-    ckpt = torch.load(path, map_location="cpu")
-    model.load_state_dict(ckpt["model_state_dict"])
-    if optimizer is not None and "optimizer_state_dict" in ckpt:
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    if scheduler is not None and ckpt.get("scheduler_state_dict") is not None:
-        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-    epoch = ckpt.get("epoch", 0)
-    print(f"[Checkpoint] Loaded epoch {epoch} from {path}")
-    return epoch
+    state_dict = torch.load(
+        path,
+        map_location="cpu"
+    )
 
+    model.load_state_dict(state_dict)
+
+    print(f"Loaded checkpoint from {path}")
+
+    return 0
 
 # ══════════════════════════════════════════════════════════════════════
 #  EXPERIMENT ENTRY POINT
