@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from model import Transformer, make_src_mask, make_tgt_mask
-from noam_lr_scheduler import NoamScheduler
+from lr_scheduler import NoamScheduler
 
 
 # ══════════════════════════════════════════════════════════════════════
