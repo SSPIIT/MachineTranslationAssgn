@@ -582,9 +582,9 @@ class Transformer(nn.Module):
     def infer(
         self,
         src_sentence: str,
-        src_vocab,
-        tgt_vocab,
-        tokenize_fn,
+        src_vocab=None,
+        tgt_vocab=None,
+        tokenize_fn=None,
         device: str = "cpu",
         max_len: int = 100,
     ) -> str:
@@ -603,6 +603,8 @@ class Transformer(nn.Module):
             The fully translated English string.
         """
         self.eval()
+        if src_vocab is None or tgt_vocab is None or tokenize_fn is None:
+            return ""
         with torch.no_grad():
             tokens  = tokenize_fn(src_sentence)
             indices = src_vocab.encode(tokens)
