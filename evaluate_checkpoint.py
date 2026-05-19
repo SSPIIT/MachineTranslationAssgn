@@ -11,7 +11,19 @@ import torch
 from model import Transformer, TransformerLearnedPE
 from dataset import build_dataloaders
 from inference import evaluate_bleu, translate_sentence
+import os
+import gdown
 
+ckpt_path = "checkpoints/transformer_base_best.pt"
+
+if not os.path.exists(ckpt_path):
+    os.makedirs("checkpoints", exist_ok=True)
+
+    file_id = "1LlPm7dEQUfyM2sCocM_jZoOm2tv8YxVW"
+    url = f"https://drive.google.com/uc?id={file_id}"
+
+    print("Downloading checkpoint from Google Drive...")
+    gdown.download(url, ckpt_path, quiet=False)
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
