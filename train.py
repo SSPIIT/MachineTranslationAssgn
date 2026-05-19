@@ -338,7 +338,7 @@ def run_training_experiment() -> None:
         "dropout":      0.1,
         "warmup_steps": 4000,
         "batch_size":   128,
-        "num_epochs":   20,
+        "num_epochs":   25,
         "min_freq":     2,
         "max_len":      100,
         "label_smoothing": 0.1,
