@@ -616,12 +616,12 @@ class Transformer(nn.Module):
     def infer(
         self,
         src_sentence: str,
-        device = next(self.parameters()).device,
+        # device = next(self.parameters()).device,
         max_len: int = 40,
     ) -> str:
 
         self.eval()
-
+        device = next(self.parameters()).device
         with torch.no_grad():
 
             tokens = [
