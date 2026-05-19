@@ -318,16 +318,17 @@ def save_checkpoint(
         "pad_idx":        model.pad_idx,
     }
 
-    torch.save(
-        {
-            "epoch":                epoch,
-            "model_state_dict":     model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-            "model_config":         model_config,
-        },
-        path,
-    )
+    # torch.save(
+    #     {
+    #         "epoch":                epoch,
+    #         "model_state_dict":     model.state_dict(),
+    #         "optimizer_state_dict": optimizer.state_dict(),
+    #         "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+    #         "model_config":         model_config,
+    #     },
+    #     path,
+    # )
+    torch.save(model.state_dict(), path)
     print(f"[Checkpoint] Saved epoch {epoch} → {path}")
 
 

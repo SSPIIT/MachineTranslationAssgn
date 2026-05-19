@@ -1,17 +1,6 @@
 """
 model.py — Transformer Architecture
 DA6401 Assignment 3: "Attention Is All You Need"
-
-AUTOGRADER CONTRACT (DO NOT MODIFY SIGNATURES):
-  ┌─────────────────────────────────────────────────────────────────┐
-  │  scaled_dot_product_attention(Q, K, V, mask) → (out, weights)  │
-  │  MultiHeadAttention.forward(q, k, v, mask)   → Tensor          │
-  │  PositionalEncoding.forward(x)               → Tensor          │
-  │  make_src_mask(src, pad_idx)                 → BoolTensor      │
-  │  make_tgt_mask(tgt, pad_idx)                 → BoolTensor      │
-  │  Transformer.encode(src, src_mask)           → Tensor          │
-  │  Transformer.decode(memory,src_m,tgt,tgt_m)  → Tensor          │
-  └─────────────────────────────────────────────────────────────────┘
 """
 
 import math
@@ -33,38 +22,20 @@ def scaled_dot_product_attention(
     V: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute Scaled Dot-Product Attention.
 
-        Attention(Q, K, V) = softmax( Q·Kᵀ / √dₖ ) · V
-
-    Args:
-        Q    : Query tensor,  shape (..., seq_q, d_k)
-        K    : Key tensor,    shape (..., seq_k, d_k)
-        V    : Value tensor,  shape (..., seq_k, d_v)
-        mask : Optional Boolean mask, shape broadcastable to
-               (..., seq_q, seq_k).
-               Positions where mask is True are MASKED OUT
-               (set to -inf before softmax).
-
-    Returns:
-        output : Attended output,   shape (..., seq_q, d_v)
-        attn_w : Attention weights, shape (..., seq_q, seq_k)
-    """
     d_k = Q.size(-1)
-    # Scaled dot-product: (..., seq_q, seq_k)
+
     scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
 
-    # Apply mask: True positions → -inf so softmax gives 0 weight
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
 
     attn_w = F.softmax(scores, dim=-1)
 
-    # Replace any NaN rows (all-masked) with 0 to avoid propagating NaN
     attn_w = torch.nan_to_num(attn_w, nan=0.0)
 
     output = torch.matmul(attn_w, V)
+
     return output, attn_w
 
 
@@ -76,19 +47,7 @@ def make_src_mask(
     src: torch.Tensor,
     pad_idx: int = 1,
 ) -> torch.Tensor:
-    """
-    Build a padding mask for the encoder (source sequence).
 
-    Args:
-        src     : Source token-index tensor, shape [batch, src_len]
-        pad_idx : Vocabulary index of the <pad> token (default 1)
-
-    Returns:
-        Boolean mask, shape [batch, 1, 1, src_len]
-        True  → position is a PAD token (will be masked out)
-        False → real token
-    """
-    # [batch, src_len] → [batch, 1, 1, src_len]
     return (src == pad_idx).unsqueeze(1).unsqueeze(2)
 
 
@@ -96,111 +55,91 @@ def make_tgt_mask(
     tgt: torch.Tensor,
     pad_idx: int = 1,
 ) -> torch.Tensor:
-    """
-    Build a combined padding + causal (look-ahead) mask for the decoder.
 
-    Args:
-        tgt     : Target token-index tensor, shape [batch, tgt_len]
-        pad_idx : Vocabulary index of the <pad> token (default 1)
-
-    Returns:
-        Boolean mask, shape [batch, 1, tgt_len, tgt_len]
-        True → position is masked out (PAD or future token)
-    """
     tgt_len = tgt.size(1)
+
     device = tgt.device
 
-    # Padding mask: [batch, 1, 1, tgt_len]
     pad_mask = (tgt == pad_idx).unsqueeze(1).unsqueeze(2)
 
-    # Causal (look-ahead) mask: upper triangle = True, shape [1, 1, tgt_len, tgt_len]
     causal_mask = torch.triu(
-        torch.ones(tgt_len, tgt_len, dtype=torch.bool, device=device),
+        torch.ones(
+            tgt_len,
+            tgt_len,
+            dtype=torch.bool,
+            device=device
+        ),
         diagonal=1,
     ).unsqueeze(0).unsqueeze(0)
 
-    # Combine: mask out if either pad OR future position
     tgt_mask = pad_mask | causal_mask
+
     return tgt_mask
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  MULTI-HEAD ATTENTION
+#  MULTIHEAD ATTENTION
 # ══════════════════════════════════════════════════════════════════════
 
 class MultiHeadAttention(nn.Module):
-    """
-    Multi-Head Attention as in "Attention Is All You Need", §3.2.2.
 
-        MultiHead(Q,K,V) = Concat(head_1,...,head_h) · W_O
-        head_i = Attention(Q·W_Qi, K·W_Ki, V·W_Vi)
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        dropout: float = 0.1,
+    ) -> None:
 
-    Args:
-        d_model   : Total model dimensionality. Must be divisible by num_heads.
-        num_heads : Number of parallel attention heads h.
-        dropout   : Dropout probability applied to attention weights.
-    """
-
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
         super().__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
-        self.d_model   = d_model
+        assert d_model % num_heads == 0
+
+        self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k       = d_model // num_heads
+        self.d_k = d_model // num_heads
 
-        # Projection matrices for Q, K, V and output
         self.W_q = nn.Linear(d_model, d_model, bias=False)
         self.W_k = nn.Linear(d_model, d_model, bias=False)
         self.W_v = nn.Linear(d_model, d_model, bias=False)
         self.W_o = nn.Linear(d_model, d_model, bias=False)
 
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(dropout)
 
-    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Split last dim into (num_heads, d_k) and transpose.
-        [batch, seq, d_model] → [batch, num_heads, seq, d_k]
-        """
-        batch, seq, _ = x.size()
-        x = x.view(batch, seq, self.num_heads, self.d_k)
+    def _split_heads(self, x):
+
+        B, T, _ = x.shape
+
+        x = x.view(B, T, self.num_heads, self.d_k)
+
         return x.transpose(1, 2)
 
     def forward(
         self,
-        query: torch.Tensor,
-        key:   torch.Tensor,
-        value: torch.Tensor,
-        mask:  Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Args:
-            query : shape [batch, seq_q, d_model]
-            key   : shape [batch, seq_k, d_model]
-            value : shape [batch, seq_k, d_model]
-            mask  : Optional BoolTensor broadcastable to
-                    [batch, num_heads, seq_q, seq_k]
+        query,
+        key,
+        value,
+        mask=None,
+    ):
 
-        Returns:
-            output : shape [batch, seq_q, d_model]
-        """
-        batch = query.size(0)
+        B = query.size(0)
 
-        # Linear projections → split into heads
-        Q = self._split_heads(self.W_q(query))   # [B, H, seq_q, d_k]
-        K = self._split_heads(self.W_k(key))     # [B, H, seq_k, d_k]
-        V = self._split_heads(self.W_v(value))   # [B, H, seq_k, d_k]
+        Q = self._split_heads(self.W_q(query))
+        K = self._split_heads(self.W_k(key))
+        V = self._split_heads(self.W_v(value))
 
-        # Scaled dot-product attention per head
-        attn_out, _ = scaled_dot_product_attention(Q, K, V, mask)
-        # attn_out: [B, H, seq_q, d_k]
+        attn_out, _ = scaled_dot_product_attention(
+            Q,
+            K,
+            V,
+            mask
+        )
 
-        # Concatenate heads: [B, seq_q, d_model]
         attn_out = attn_out.transpose(1, 2).contiguous()
-        attn_out = attn_out.view(batch, -1, self.d_model)
 
-        # Final linear projection
+        attn_out = attn_out.view(B, -1, self.d_model)
+
         output = self.W_o(attn_out)
+
         return output
 
 
@@ -209,79 +148,81 @@ class MultiHeadAttention(nn.Module):
 # ══════════════════════════════════════════════════════════════════════
 
 class PositionalEncoding(nn.Module):
-    """
-    Sinusoidal Positional Encoding as in "Attention Is All You Need", §3.5.
 
-    PE(pos, 2i)   = sin(pos / 10000^(2i / d_model))
-    PE(pos, 2i+1) = cos(pos / 10000^(2i / d_model))
+    def __init__(
+        self,
+        d_model: int,
+        dropout: float = 0.1,
+        max_len: int = 5000,
+    ) -> None:
 
-    Args:
-        d_model  : Embedding dimensionality.
-        dropout  : Dropout applied after adding encodings.
-        max_len  : Maximum sequence length to pre-compute (default 5000).
-    """
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000) -> None:
         super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
 
-        # Build the positional encoding table: [max_len, d_model]
+        self.dropout = nn.Dropout(dropout)
+
         pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # [max_len, 1]
-        # div_term: [d_model/2]
+
+        position = torch.arange(
+            0,
+            max_len,
+            dtype=torch.float
+        ).unsqueeze(1)
+
         div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float)
+            torch.arange(
+                0,
+                d_model,
+                2,
+                dtype=torch.float
+            )
             * (-math.log(10000.0) / d_model)
         )
-        pe[:, 0::2] = torch.sin(position * div_term)   # even dims
-        pe[:, 1::2] = torch.cos(position * div_term)   # odd dims
 
-        # Register as buffer (not a trainable parameter)
-        pe = pe.unsqueeze(0)   # [1, max_len, d_model]
+        pe[:, 0::2] = torch.sin(position * div_term)
+
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0)
+
         self.register_buffer("pe", pe)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x : Input embeddings, shape [batch, seq_len, d_model]
+    def forward(self, x):
 
-        Returns:
-            Tensor of same shape: x + PE[:, :seq_len, :]
-        """
-        x = x + self.pe[:, : x.size(1), :]
+        x = x + self.pe[:, :x.size(1), :]
+
         return self.dropout(x)
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  FEED-FORWARD NETWORK
+#  FEED FORWARD
 # ══════════════════════════════════════════════════════════════════════
 
 class PositionwiseFeedForward(nn.Module):
-    """
-    Position-wise Feed-Forward Network, §3.3:
 
-        FFN(x) = max(0, x·W₁ + b₁)·W₂ + b₂
+    def __init__(
+        self,
+        d_model,
+        d_ff,
+        dropout=0.1,
+    ):
 
-    Args:
-        d_model : Input / output dimensionality (e.g. 512).
-        d_ff    : Inner-layer dimensionality (e.g. 2048).
-        dropout : Dropout applied between the two linears.
-    """
-
-    def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1) -> None:
         super().__init__()
-        self.linear1 = nn.Linear(d_model, d_ff)
-        self.linear2 = nn.Linear(d_ff, d_model)
-        self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x : shape [batch, seq_len, d_model]
-        Returns:
-              shape [batch, seq_len, d_model]
-        """
-        return self.linear2(self.dropout(F.relu(self.linear1(x))))
+        self.linear1 = nn.Linear(d_model, d_ff)
+
+        self.linear2 = nn.Linear(d_ff, d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+
+        return self.linear2(
+            self.dropout(
+                F.relu(
+                    self.linear1(x)
+                )
+            )
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -289,41 +230,52 @@ class PositionwiseFeedForward(nn.Module):
 # ══════════════════════════════════════════════════════════════════════
 
 class EncoderLayer(nn.Module):
-    """
-    Single Transformer encoder sub-layer:
-        x → [Self-Attention → Add & Norm] → [FFN → Add & Norm]
 
-    Uses Pre-LayerNorm (apply norm BEFORE the sub-layer) for training
-    stability, as empirically shown to converge faster than Post-LN.
+    def __init__(
+        self,
+        d_model,
+        num_heads,
+        d_ff,
+        dropout=0.1,
+    ):
 
-    Args:
-        d_model   : Model dimensionality.
-        num_heads : Number of attention heads.
-        d_ff      : FFN inner dimensionality.
-        dropout   : Dropout probability.
-    """
-
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
         super().__init__()
-        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
-        self.ffn       = PositionwiseFeedForward(d_model, d_ff, dropout)
-        self.norm1     = nn.LayerNorm(d_model)
-        self.norm2     = nn.LayerNorm(d_model)
-        self.dropout   = nn.Dropout(p=dropout)
 
-    def forward(self, x: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x        : shape [batch, src_len, d_model]
-            src_mask : shape [batch, 1, 1, src_len]
+        self.self_attn = MultiHeadAttention(
+            d_model,
+            num_heads,
+            dropout
+        )
 
-        Returns:
-            shape [batch, src_len, d_model]
-        """
-        # Pre-LN self-attention with residual
-        x = x + self.dropout(self.self_attn(self.norm1(x), self.norm1(x), self.norm1(x), src_mask))
-        # Pre-LN FFN with residual
-        x = x + self.dropout(self.ffn(self.norm2(x)))
+        self.ffn = PositionwiseFeedForward(
+            d_model,
+            d_ff,
+            dropout
+        )
+
+        self.norm1 = nn.LayerNorm(d_model)
+
+        self.norm2 = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, src_mask):
+
+        x = x + self.dropout(
+            self.self_attn(
+                self.norm1(x),
+                self.norm1(x),
+                self.norm1(x),
+                src_mask
+            )
+        )
+
+        x = x + self.dropout(
+            self.ffn(
+                self.norm2(x)
+            )
+        )
+
         return x
 
 
@@ -332,177 +284,245 @@ class EncoderLayer(nn.Module):
 # ══════════════════════════════════════════════════════════════════════
 
 class DecoderLayer(nn.Module):
-    """
-    Single Transformer decoder sub-layer:
-        x → [Masked Self-Attn → Add & Norm]
-          → [Cross-Attn(memory) → Add & Norm]
-          → [FFN → Add & Norm]
 
-    Args:
-        d_model   : Model dimensionality.
-        num_heads : Number of attention heads.
-        d_ff      : FFN inner dimensionality.
-        dropout   : Dropout probability.
-    """
+    def __init__(
+        self,
+        d_model,
+        num_heads,
+        d_ff,
+        dropout=0.1,
+    ):
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
         super().__init__()
-        self.self_attn  = MultiHeadAttention(d_model, num_heads, dropout)
-        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout)
-        self.ffn        = PositionwiseFeedForward(d_model, d_ff, dropout)
-        self.norm1      = nn.LayerNorm(d_model)
-        self.norm2      = nn.LayerNorm(d_model)
-        self.norm3      = nn.LayerNorm(d_model)
-        self.dropout    = nn.Dropout(p=dropout)
+
+        self.self_attn = MultiHeadAttention(
+            d_model,
+            num_heads,
+            dropout
+        )
+
+        self.cross_attn = MultiHeadAttention(
+            d_model,
+            num_heads,
+            dropout
+        )
+
+        self.ffn = PositionwiseFeedForward(
+            d_model,
+            d_ff,
+            dropout
+        )
+
+        self.norm1 = nn.LayerNorm(d_model)
+
+        self.norm2 = nn.LayerNorm(d_model)
+
+        self.norm3 = nn.LayerNorm(d_model)
+
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
-        x:        torch.Tensor,
-        memory:   torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            x        : shape [batch, tgt_len, d_model]
-            memory   : Encoder output, shape [batch, src_len, d_model]
-            src_mask : shape [batch, 1, 1, src_len]
-            tgt_mask : shape [batch, 1, tgt_len, tgt_len]
+        x,
+        memory,
+        src_mask,
+        tgt_mask,
+    ):
 
-        Returns:
-            shape [batch, tgt_len, d_model]
-        """
-        # Masked self-attention (causal)
-        x = x + self.dropout(self.self_attn(self.norm1(x), self.norm1(x), self.norm1(x), tgt_mask))
-        # Cross-attention over encoder memory
-        x = x + self.dropout(self.cross_attn(self.norm2(x), memory, memory, src_mask))
-        # Feed-forward
-        x = x + self.dropout(self.ffn(self.norm3(x)))
+        x = x + self.dropout(
+            self.self_attn(
+                self.norm1(x),
+                self.norm1(x),
+                self.norm1(x),
+                tgt_mask
+            )
+        )
+
+        x = x + self.dropout(
+            self.cross_attn(
+                self.norm2(x),
+                memory,
+                memory,
+                src_mask
+            )
+        )
+
+        x = x + self.dropout(
+            self.ffn(
+                self.norm3(x)
+            )
+        )
+
         return x
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  ENCODER & DECODER STACKS
+#  ENCODER
 # ══════════════════════════════════════════════════════════════════════
 
 class Encoder(nn.Module):
-    """Stack of N identical EncoderLayer modules with final LayerNorm."""
 
-    def __init__(self, layer: EncoderLayer, N: int) -> None:
+    def __init__(self, layer, N):
+
         super().__init__()
-        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
-        self.norm   = nn.LayerNorm(layer.norm1.normalized_shape)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x    : shape [batch, src_len, d_model]
-            mask : shape [batch, 1, 1, src_len]
-        Returns:
-            shape [batch, src_len, d_model]
-        """
+        self.layers = nn.ModuleList(
+            [copy.deepcopy(layer) for _ in range(N)]
+        )
+
+        self.norm = nn.LayerNorm(
+            layer.norm1.normalized_shape
+        )
+
+    def forward(self, x, mask):
+
         for layer in self.layers:
             x = layer(x, mask)
+
         return self.norm(x)
 
 
-class Decoder(nn.Module):
-    """Stack of N identical DecoderLayer modules with final LayerNorm."""
+# ══════════════════════════════════════════════════════════════════════
+#  DECODER
+# ══════════════════════════════════════════════════════════════════════
 
-    def __init__(self, layer: DecoderLayer, N: int) -> None:
+class Decoder(nn.Module):
+
+    def __init__(self, layer, N):
+
         super().__init__()
-        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
-        self.norm   = nn.LayerNorm(layer.norm1.normalized_shape)
+
+        self.layers = nn.ModuleList(
+            [copy.deepcopy(layer) for _ in range(N)]
+        )
+
+        self.norm = nn.LayerNorm(
+            layer.norm1.normalized_shape
+        )
 
     def forward(
         self,
-        x:        torch.Tensor,
-        memory:   torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            x        : shape [batch, tgt_len, d_model]
-            memory   : shape [batch, src_len, d_model]
-            src_mask : shape [batch, 1, 1, src_len]
-            tgt_mask : shape [batch, 1, tgt_len, tgt_len]
-        Returns:
-            shape [batch, tgt_len, d_model]
-        """
+        x,
+        memory,
+        src_mask,
+        tgt_mask,
+    ):
+
         for layer in self.layers:
-            x = layer(x, memory, src_mask, tgt_mask)
+            x = layer(
+                x,
+                memory,
+                src_mask,
+                tgt_mask
+            )
+
         return self.norm(x)
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  FULL TRANSFORMER
+#  TRANSFORMER
 # ══════════════════════════════════════════════════════════════════════
 
 class Transformer(nn.Module):
-    """
-    Full Encoder-Decoder Transformer for sequence-to-sequence tasks.
-
-    Args:
-        src_vocab_size : Source vocabulary size.
-        tgt_vocab_size : Target vocabulary size.
-        d_model        : Model dimensionality (default 512).
-        N              : Number of encoder/decoder layers (default 6).
-        num_heads      : Number of attention heads (default 8).
-        d_ff           : FFN inner dimensionality (default 2048).
-        dropout        : Dropout probability (default 0.1).
-        pad_idx        : Padding index (default 1).
-    """
 
     def __init__(
         self,
         src_vocab_size: int = 10000,
         tgt_vocab_size: int = 10000,
-        d_model:   int   = 512,
-        N:         int   = 6,
-        num_heads: int   = 8,
-        d_ff:      int   = 2048,
-        dropout:   float = 0.1,
-        pad_idx:   int   = 1,
-        checkpoint_path: str = None,
+        d_model: int = 512,
+        N: int = 6,
+        num_heads: int = 8,
+        d_ff: int = 2048,
+        dropout: float = 0.1,
+        pad_idx: int = 1,
     ) -> None:
+
         super().__init__()
 
+        import spacy
+        from dataset import get_dataloaders
+
+        self.device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
+
+        self.de_nlp = spacy.load("de_core_news_sm")
+
+        _, _, _, self.src_vocab, self.tgt_vocab = get_dataloaders(
+            batch_size=1
+        )
+
+        src_vocab_size = len(self.src_vocab)
+        tgt_vocab_size = len(self.tgt_vocab)
+
         self.d_model = d_model
+
         self.pad_idx = pad_idx
 
-        # Token embeddings
-        self.src_embed = nn.Embedding(src_vocab_size, d_model, padding_idx=pad_idx)
-        self.tgt_embed = nn.Embedding(tgt_vocab_size, d_model, padding_idx=pad_idx)
+        self.src_embed = nn.Embedding(
+            src_vocab_size,
+            d_model,
+            padding_idx=pad_idx
+        )
 
-        # Positional encoding (shared formula, separate instances)
-        self.src_pe = PositionalEncoding(d_model, dropout)
-        self.tgt_pe = PositionalEncoding(d_model, dropout)
+        self.tgt_embed = nn.Embedding(
+            tgt_vocab_size,
+            d_model,
+            padding_idx=pad_idx
+        )
 
-        # Encoder & Decoder stacks
-        enc_layer = EncoderLayer(d_model, num_heads, d_ff, dropout)
-        dec_layer = DecoderLayer(d_model, num_heads, d_ff, dropout)
+        self.src_pe = PositionalEncoding(
+            d_model,
+            dropout
+        )
+
+        self.tgt_pe = PositionalEncoding(
+            d_model,
+            dropout
+        )
+
+        enc_layer = EncoderLayer(
+            d_model,
+            num_heads,
+            d_ff,
+            dropout
+        )
+
+        dec_layer = DecoderLayer(
+            d_model,
+            num_heads,
+            d_ff,
+            dropout
+        )
+
         self.encoder = Encoder(enc_layer, N)
+
         self.decoder = Decoder(dec_layer, N)
 
-        # Final linear projection to vocabulary logits
-        self.fc_out = nn.Linear(d_model, tgt_vocab_size)
+        self.fc_out = nn.Linear(
+            d_model,
+            tgt_vocab_size
+        )
 
-        # Weight initialisation (Xavier uniform, as common practice)
         self._init_weights()
 
-        # Optionally load from checkpoint
-        if checkpoint_path is not None:
-            self._load_from_drive(checkpoint_path)
+        self._load_from_drive(
+            "best_checkpoint.pt"
+        )
 
-    # ------------------------------------------------------------------
-    def _init_weights(self) -> None:
+    def _init_weights(self):
+
         for p in self.parameters():
+
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def _load_from_drive(self, path: str) -> None:
+    def _load_from_drive(self, path):
+
         try:
+
             import gdown
 
             gdown.download(
@@ -511,127 +531,166 @@ class Transformer(nn.Module):
                 quiet=False
             )
 
-            state = torch.load(path, map_location="cpu")
+            state = torch.load(
+                path,
+                map_location="cpu"
+            )
+
             self.load_state_dict(state)
 
+            print(
+                "[Transformer] Weights loaded successfully."
+            )
+
         except Exception as e:
-            print(f"[Transformer] Warning: could not load checkpoint — {e}")
-    # ── AUTOGRADER HOOKS ─────────────────────────────────────────────
+
+            print(
+                f"[Transformer] Warning: could not load checkpoint — {e}"
+            )
 
     def encode(
         self,
-        src:      torch.Tensor,
-        src_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Run the full encoder stack.
+        src,
+        src_mask,
+    ):
 
-        Args:
-            src      : Token indices, shape [batch, src_len]
-            src_mask : shape [batch, 1, 1, src_len]
+        src_emb = self.src_pe(
+            self.src_embed(src)
+            * math.sqrt(self.d_model)
+        )
 
-        Returns:
-            memory : Encoder output, shape [batch, src_len, d_model]
-        """
-        # Embed + scale + positional encoding
-        src_emb = self.src_pe(self.src_embed(src) * math.sqrt(self.d_model))
-        memory  = self.encoder(src_emb, src_mask)
+        memory = self.encoder(
+            src_emb,
+            src_mask
+        )
+
         return memory
 
     def decode(
         self,
-        memory:   torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt:      torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Run the full decoder stack and project to vocabulary logits.
+        memory,
+        src_mask,
+        tgt,
+        tgt_mask,
+    ):
 
-        Args:
-            memory   : Encoder output,  shape [batch, src_len, d_model]
-            src_mask : shape [batch, 1, 1, src_len]
-            tgt      : Token indices,   shape [batch, tgt_len]
-            tgt_mask : shape [batch, 1, tgt_len, tgt_len]
+        tgt_emb = self.tgt_pe(
+            self.tgt_embed(tgt)
+            * math.sqrt(self.d_model)
+        )
 
-        Returns:
-            logits : shape [batch, tgt_len, tgt_vocab_size]
-        """
-        tgt_emb = self.tgt_pe(self.tgt_embed(tgt) * math.sqrt(self.d_model))
-        dec_out = self.decoder(tgt_emb, memory, src_mask, tgt_mask)
-        logits  = self.fc_out(dec_out)
+        dec_out = self.decoder(
+            tgt_emb,
+            memory,
+            src_mask,
+            tgt_mask
+        )
+
+        logits = self.fc_out(dec_out)
+
         return logits
 
     def forward(
         self,
-        src:      torch.Tensor,
-        tgt:      torch.Tensor,
-        src_mask: torch.Tensor,
-        tgt_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Full encoder-decoder forward pass.
+        src,
+        tgt,
+        src_mask,
+        tgt_mask,
+    ):
 
-        Args:
-            src      : shape [batch, src_len]
-            tgt      : shape [batch, tgt_len]
-            src_mask : shape [batch, 1, 1, src_len]
-            tgt_mask : shape [batch, 1, tgt_len, tgt_len]
+        memory = self.encode(
+            src,
+            src_mask
+        )
 
-        Returns:
-            logits : shape [batch, tgt_len, tgt_vocab_size]
-        """
-        memory = self.encode(src, src_mask)
-        logits = self.decode(memory, src_mask, tgt, tgt_mask)
+        logits = self.decode(
+            memory,
+            src_mask,
+            tgt,
+            tgt_mask
+        )
+
         return logits
 
     def infer(
         self,
         src_sentence: str,
-        src_vocab=None,
-        tgt_vocab=None,
-        tokenize_fn=None,
         device: str = "cpu",
         max_len: int = 100,
     ) -> str:
-        """
-        Translates a German sentence to English using greedy autoregressive decoding.
 
-        Args:
-            src_sentence : The raw German text.
-            src_vocab    : Source Vocabulary object.
-            tgt_vocab    : Target Vocabulary object.
-            tokenize_fn  : Callable that tokenises a German string → List[str].
-            device       : 'cpu' or 'cuda'.
-            max_len      : Maximum generated token count.
-
-        Returns:
-            The fully translated English string.
-        """
         self.eval()
-        if src_vocab is None or tgt_vocab is None or tokenize_fn is None:
-            return ""
+
         with torch.no_grad():
-            tokens  = tokenize_fn(src_sentence)
-            indices = src_vocab.encode(tokens)
-            src     = torch.tensor(indices, dtype=torch.long).unsqueeze(0).to(device)
-            src_mask = make_src_mask(src, pad_idx=self.pad_idx)
 
-            memory = self.encode(src, src_mask)
+            tokens = [
+                tok.text.lower()
+                for tok in self.de_nlp(
+                    src_sentence.strip()
+                )
+            ]
 
-            # Greedy decode
-            sos_idx = tgt_vocab.SOS_IDX
-            eos_idx = tgt_vocab.EOS_IDX
-            ys = torch.tensor([[sos_idx]], dtype=torch.long, device=device)
+            indices = self.src_vocab.encode(
+                tokens
+            )
+
+            src = torch.tensor(
+                indices,
+                dtype=torch.long
+            ).unsqueeze(0).to(device)
+
+            src_mask = make_src_mask(
+                src,
+                pad_idx=self.pad_idx
+            )
+
+            memory = self.encode(
+                src,
+                src_mask
+            )
+
+            sos_idx = self.tgt_vocab.SOS_IDX
+
+            eos_idx = self.tgt_vocab.EOS_IDX
+
+            ys = torch.tensor(
+                [[sos_idx]],
+                dtype=torch.long,
+                device=device
+            )
 
             for _ in range(max_len):
-                tgt_mask = make_tgt_mask(ys, pad_idx=self.pad_idx)
-                logits   = self.decode(memory, src_mask, ys, tgt_mask)
-                next_tok = logits[:, -1, :].argmax(dim=-1, keepdim=True)
-                ys       = torch.cat([ys, next_tok], dim=1)
+
+                tgt_mask = make_tgt_mask(
+                    ys,
+                    pad_idx=self.pad_idx
+                )
+
+                logits = self.decode(
+                    memory,
+                    src_mask,
+                    ys,
+                    tgt_mask
+                )
+
+                next_tok = logits[:, -1, :].argmax(
+                    dim=-1,
+                    keepdim=True
+                )
+
+                ys = torch.cat(
+                    [ys, next_tok],
+                    dim=1
+                )
+
                 if next_tok.item() == eos_idx:
                     break
 
-            generated = ys.squeeze(0).tolist()[1:]   # strip SOS
-            words = tgt_vocab.decode(generated, skip_special=True)
+            generated = ys.squeeze(0).tolist()[1:]
+
+            words = self.tgt_vocab.decode(
+                generated,
+                skip_special=True
+            )
+
             return " ".join(words)
