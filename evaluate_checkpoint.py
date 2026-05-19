@@ -14,23 +14,28 @@ from inference import evaluate_bleu, translate_sentence
 import os
 import gdown
 
-ckpt_path = "checkpoints/transformer_base_best.pt"
-
-if not os.path.exists(ckpt_path):
-    os.makedirs("checkpoints", exist_ok=True)
-
-    file_id = "1LlPm7dEQUfyM2sCocM_jZoOm2tv8YxVW"
-    url = f"https://drive.google.com/uc?id={file_id}"
-
-    print("Downloading checkpoint from Google Drive...")
-    gdown.download(url, ckpt_path, quiet=False)
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if not os.path.exists(args.checkpoint):
+        os.makedirs("checkpoints", exist_ok=True)
+
+        file_id = "1LlPm7dEQUfyM2sCocM_jZoOm2tv8YxVW"
+        url = f"https://drive.google.com/uc?id={file_id}"
+
+        print("Downloading checkpoint from Google Drive...")
+        gdown.download(url, args.checkpoint, quiet=False)
+
     print(f"Loading checkpoint: {args.checkpoint}")
 
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    cfg  = ckpt['args']
+    # ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(
+        args.checkpoint,
+        map_location=device,
+        weights_only=False
+    )
+    cfg = ckpt['args']
     src_vocab = ckpt['src_vocab']
     tgt_vocab = ckpt['tgt_vocab']
 
