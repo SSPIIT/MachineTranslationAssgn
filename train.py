@@ -18,6 +18,7 @@ Trains the Transformer on Multi30k (DE → EN) with:
 import os
 import math
 import argparse
+import model
 import torch
 import torch.nn as nn
 import wandb
@@ -285,15 +286,17 @@ def main(args):
             ckpt_path = os.path.join(args.save_dir, f"{args.run_name}_best.pt")
             print(f"  Run: python evaluate_checkpoint.py --checkpoint {ckpt_path}")
             os.makedirs(args.save_dir, exist_ok=True)
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_bleu': val_bleu,
-                'src_vocab': src_vocab,
-                'tgt_vocab': tgt_vocab,
-                'args': vars(args),
-            }, ckpt_path)
+            # torch.save({
+            #     'epoch': epoch,
+            #     'model_state_dict': model.state_dict(),
+            #     'optimizer_state_dict': optimizer.state_dict(),
+            #     'val_bleu': val_bleu,
+            #     'src_vocab': src_vocab,
+            #     'tgt_vocab': tgt_vocab,
+            #     'args': vars(args),
+            # }, ckpt_path)
+            save_path = os.path.join(args.save_dir, f"{args.run_name}_best.pt")
+            torch.save(model.state_dict(), save_path)
             print(f"  → Saved best checkpoint (BLEU {val_bleu:.2f})")
 
         # Log attention maps every 5 epochs
@@ -305,12 +308,8 @@ def main(args):
 
     # Final test BLEU using best checkpoint
     print("\nEvaluating best checkpoint on test set...")
-    ckpt = torch.load(
-        os.path.join(args.save_dir, f"{args.run_name}_best.pt"),
-        map_location=device,
-        weights_only=False
-    )
-    model.load_state_dict(ckpt['model_state_dict'])
+    ckpt = torch.load(best_ckpt_path, map_location=device)
+    model.load_state_dict(ckpt)
     test_bleu = evaluate_bleu(model, test_loader, src_vocab, tgt_vocab,
                                device, max_len=args.max_len)
     print(f"Test BLEU: {test_bleu:.2f}")

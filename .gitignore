@@ -5,9 +5,9 @@ __pycache__/
 wandb/
 .cache/
 
-checkpoints/*.pt
+# checkpoints/*.pt
 
 *.pth
-*.pt
+# *.pt
 
 .DS_Store
