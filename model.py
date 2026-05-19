@@ -504,12 +504,18 @@ class Transformer(nn.Module):
     def _load_from_drive(self, path: str) -> None:
         try:
             import gdown
-            gdown.download(id="<.pth drive id>", output=path, quiet=False)
+
+            gdown.download(
+                id="10ZkESdbBEproTxuYRDkDw0slEh31uzzw",
+                output=path,
+                quiet=False
+            )
+
             state = torch.load(path, map_location="cpu")
-            self.load_state_dict(state["model_state_dict"])
+            self.load_state_dict(state)
+
         except Exception as e:
             print(f"[Transformer] Warning: could not load checkpoint — {e}")
-
     # ── AUTOGRADER HOOKS ─────────────────────────────────────────────
 
     def encode(

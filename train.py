@@ -237,7 +237,7 @@ def evaluate_bleu(
     Returns:
         bleu_score : Corpus-level BLEU × 100 (float, range 0–100).
     """
-    from torchtext.data.metrics import bleu_score as torchtext_bleu
+    from nltk.translate.bleu_score import corpus_bleu
 
     model.eval()
     pad_idx = model.pad_idx
@@ -281,7 +281,7 @@ def evaluate_bleu(
     # torchtext bleu_score expects:
     #   candidate_corpus : List[List[str]]
     #   references_corpus: List[List[List[str]]]
-    score = torchtext_bleu(hypotheses, references) * 100.0
+    score = corpus_bleu(references, hypotheses) * 100.0
     return score
 
 
